@@ -374,6 +374,26 @@ body.lecture *,body.lecture *::before,body.lecture *::after{animation:none!impor
 .carte-boite{min-height:0;display:flex;justify-content:center}
 .carte-svg{display:block;width:100%;height:auto;max-height:calc(var(--h,100vh) - 120px);border-radius:14px;border:2px solid var(--encre)}
 .lien-carte{font:inherit;font-size:.86rem;color:var(--lapis);background:var(--soie);border:1px solid var(--lapis);border-radius:999px;padding:1px 10px;margin-left:4px;cursor:pointer}
+
+/* Plan de Venise en 3D (même principe que les plans 3D d'Athènes et de New York) */
+.plan-vue{position:relative;width:100%}
+.plan-vue>.plan-boite{display:block;width:100%}
+.plan3d{position:relative;width:100%;aspect-ratio:16/10;max-height:calc(var(--h,100vh) - 230px);margin:0 auto;border-radius:14px;overflow:hidden;background:#ecdcb8;border:2px solid var(--encre);touch-action:none}
+.col-illus.avec-doc .plan3d{max-height:calc(var(--h,100vh) - 250px - 16vh)}
+.plan3d canvas{display:block;width:100%!important;height:100%!important;outline:none}
+.bascule-vue{position:absolute;z-index:4;left:8px;top:8px;display:flex;gap:4px;flex-wrap:wrap}
+.bascule-vue button{font-family:var(--f-titre);font-size:.78rem;letter-spacing:.03em;background:rgba(244,234,210,.92);color:var(--lapis);border:1px solid var(--lapis);border-radius:999px;padding:2px 11px;min-height:28px;cursor:pointer}
+.bascule-vue button[aria-pressed="true"]{background:var(--lapis);color:var(--soie)}
+.bascule-vue button:focus-visible{outline:2px solid var(--vermillon);outline-offset:2px}
+.tip3d{position:absolute;z-index:3;pointer-events:none;background:var(--encre);color:var(--soie);font-size:.84rem;padding:3px 10px;border-radius:999px;transform:translate(-50%,-150%);white-space:nowrap;border:1px solid var(--or-clair)}
+.legende3d{position:absolute;right:8px;top:8px;display:flex;gap:10px;flex-wrap:wrap;background:rgba(244,234,210,.9);color:var(--encre);font-size:.74rem;padding:3px 10px;border-radius:10px;border:1px solid var(--parchemin-ombre);pointer-events:none}
+.legende3d span{display:inline-flex;align-items:center;gap:5px}
+.legende3d i{width:11px;height:11px;border-radius:50%;display:inline-block;border:1.5px solid var(--encre)}
+.l-ouvert{background:var(--vermillon)}.l-vu{background:var(--malachite)}
+.rose3d{position:absolute;right:10px;top:38px;width:38px;height:38px;pointer-events:none}
+.aide3d{position:absolute;left:8px;bottom:8px;margin:0;max-width:calc(100% - 16px);background:rgba(244,234,210,.9);color:var(--encre);font-size:.72rem;line-height:1.3;padding:3px 9px;border-radius:8px;pointer-events:none}
+body.lecture .aide3d,body.lecture .legende3d{font-size:.8rem}
+@media (max-width:899px),(max-height:479px){.plan3d,.col-illus.avec-doc .plan3d{max-height:none;height:min(56vw,46vh);aspect-ratio:auto}}
 </style>
 
 <div class="app">
@@ -411,6 +431,350 @@ body.lecture *,body.lecture *::before,body.lecture *::after{animation:none!impor
 <div class="parchemin boite-doc" id="boite-doc" role="dialog" aria-modal="true" aria-label="Document d'époque" hidden></div>
 <div class="bulle-def" id="bulle-def" role="tooltip" hidden></div>
 
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+<script>
+/* ============ PLAN DE VENISE EN 3D (Three.js r128 + OrbitControls) ============
+   Même principe que les plans 3D d'Athènes et de New York : la 3D est un plus.
+   Si Three.js ne se charge pas ou si l'appareil n'a pas WebGL, le plan 2D s'affiche.
+   Repère : les coordonnées du plan 2D (640 × 400). x vers l'est, z vers le sud ; 1 unité ≈ 6 m.
+   La ville est dessinée telle qu'on l'imagine vers 1147 : pas encore de pont au Rialto,
+   une basilique Saint-Marc à cinq coupoles, un Arsenal neuf (fondé, dit-on, en 1104). */
+var VENISE3D=(function(){
+  'use strict';
+  var R,scene,cam,ctl,inited=false,actif=false,box=null,tip=null,OV=null,OX=null,boussole=null;
+  var pins=[],labels=[],onClic=null,estCalme=function(){return false;},anim=[],eauTex=null,eauGT=null;
+  var HAUT=1.6; /* hauteur des îles au-dessus de l'eau */
+  function ok(){try{if(!window.THREE||!THREE.OrbitControls)return false;var c=document.createElement('canvas');return !!(c.getContext('webgl')||c.getContext('experimental-webgl'));}catch(e){return false;}}
+
+  /* ---- hasard reproductible : la ville est la même à chaque visite ---- */
+  var graine=1147;
+  function alea(){graine=graine+0x6D2B79F5|0;var t=Math.imul(graine^graine>>>15,1|graine);t=t+Math.imul(t^t>>>7,61|t)^t;return((t^t>>>14)>>>0)/4294967296;}
+  function rnd(a,b){return a+alea()*(b-a);}
+  function choix(t){return t[Math.floor(alea()*t.length)];}
+
+  /* ---- géographie : les mêmes tracés que le plan 2D ---- */
+  var ILE='M110 200C120 160 170 120 240 112C300 104 360 100 420 112C480 124 540 140 585 170C610 188 600 214 570 226C530 240 480 246 440 250C400 256 360 262 320 262C260 264 200 262 160 250C120 238 104 222 110 200Z';
+  var GIUDECCA='M170 300C260 288 340 290 430 298C340 310 260 308 170 300Z';
+  var LIDO='M560 380C600 340 624 296 636 252L700 254L700 460L580 460Z';
+  var TERRE='M-80 150L40 140L60 210L-80 236Z';
+  var GRAND_CANAL='M118 196C170 176 230 160 272 150C300 144 330 138 346 152C362 168 330 192 300 206C270 220 262 240 300 250C340 258 380 256 424 256';
+  var RII=['M200 122Q232 172 210 236','M386 112Q404 170 384 240','M488 140Q472 196 494 236','M150 210Q260 196 300 230','M548 212Q552 226 560 236'];
+  function echantillon(d,pas){
+    var t=d.match(/[MLCQZ]|-?\d*\.?\d+/g),i=0,pts=[],cx=0,cy=0,sx=0,sy=0,cmd='';pas=pas||12;
+    function n(){return parseFloat(t[i++]);}
+    while(i<t.length){
+      if(/[MLCQZ]/.test(t[i]))cmd=t[i++];
+      if(cmd==='M'){cx=n();cy=n();sx=cx;sy=cy;pts.push([cx,cy]);cmd='L';}
+      else if(cmd==='L'){cx=n();cy=n();pts.push([cx,cy]);}
+      else if(cmd==='C'){var x1=n(),y1=n(),x2=n(),y2=n(),x=n(),y=n();for(var k=1;k<=pas;k++){var s=k/pas,u=1-s;pts.push([u*u*u*cx+3*u*u*s*x1+3*u*s*s*x2+s*s*s*x,u*u*u*cy+3*u*u*s*y1+3*u*s*s*y2+s*s*s*y]);}cx=x;cy=y;}
+      else if(cmd==='Q'){var qx=n(),qy=n(),x3=n(),y3=n();for(var q=1;q<=pas;q++){var s2=q/pas,u2=1-s2;pts.push([u2*u2*cx+2*u2*s2*qx+s2*s2*x3,u2*u2*cy+2*u2*s2*qy+s2*s2*y3]);}cx=x3;cy=y3;}
+      else if(cmd==='Z'){cx=sx;cy=sy;cmd='';}
+      else i++;
+    }
+    return pts;
+  }
+  var P_ILE=echantillon(ILE),P_GC=echantillon(GRAND_CANAL,24),P_RII=RII.map(function(d){return echantillon(d,16);});
+  function inPoly(x,y,poly){var c=false;for(var i=0,j=poly.length-1;i<poly.length;j=i++){var xi=poly[i][0],yi=poly[i][1],xj=poly[j][0],yj=poly[j][1];if(((yi>y)!==(yj>y))&&(x<(xj-xi)*(y-yi)/(yj-yi)+xi))c=!c;}return c;}
+  function distSeg(px,py,ax,ay,bx,by){var dx=bx-ax,dy=by-ay,t=Math.max(0,Math.min(1,((px-ax)*dx+(py-ay)*dy)/(dx*dx+dy*dy||1)));return Math.hypot(px-ax-t*dx,py-ay-t*dy);}
+  function distLigne(x,y,l,ferme){var d=1e9,n=ferme?l.length:l.length-1;for(var i=0;i<n;i++){var a=l[i],b=l[(i+1)%l.length],e=distSeg(x,y,a[0],a[1],b[0],b[1]);if(e<d)d=e;}return d;}
+  /* l'Arsenal : un bassin fermé de murs, au bout de la ville */
+  var ARS={x:540,y:200,rx:20,ry:12,mx:27,my:18};
+  function dansEllipse(x,y,cx,cy,rx,ry){var a=(x-cx)/rx,b=(y-cy)/ry;return a*a+b*b<=1;}
+  /* place Saint-Marc et marché du Rialto : des espaces ouverts */
+  var PLACE=[392,222,422,250],MARCHE=[312,160,336,182];
+  function dansRect(x,y,r){return x>=r[0]&&x<=r[2]&&y>=r[1]&&y<=r[3];}
+
+  function V(x,y,h){return new THREE.Vector3(x-320,h||0,y-200);}
+  function mat(c,o){return new THREE.MeshLambertMaterial(Object.assign({color:c},o||{}));}
+  var ENCRE='#2a1c12';
+  function bord(m,ep){var e=new THREE.LineSegments(new THREE.EdgesGeometry(m.geometry,30),new THREE.LineBasicMaterial({color:ENCRE,transparent:true,opacity:ep||.7}));m.add(e);return m;}
+  function boite(w,h,d,c,x,y,base,rot,bords){var m=new THREE.Mesh(new THREE.BoxGeometry(w,h,d),mat(c));var p=V(x,y,(base||HAUT)+h/2);m.position.copy(p);m.rotation.y=rot||0;m.castShadow=m.receiveShadow=true;if(bords)bord(m);scene.add(m);return m;}
+
+  /* ---- texture des îles : parchemin, pavés, canaux peints comme sur le plan ---- */
+  var TS=3.2;
+  function chemin(c,pts){c.beginPath();pts.forEach(function(p,i){if(i)c.lineTo(p[0]*TS,p[1]*TS);else c.moveTo(p[0]*TS,p[1]*TS);});}
+  function textureIles(){
+    var cv=document.createElement('canvas');cv.width=640*TS;cv.height=400*TS;var c=cv.getContext('2d');
+    c.fillStyle='#ecdcb8';c.fillRect(0,0,cv.width,cv.height);
+    /* grain du parchemin */
+    for(var i=0;i<9000;i++){c.fillStyle='rgba(120,90,50,'+rnd(.03,.08)+')';c.fillRect(rnd(0,cv.width),rnd(0,cv.height),rnd(1,3),rnd(1,3));}
+    /* jardins et vergers (Giudecca, bords de ville) */
+    c.fillStyle='rgba(84,120,60,.45)';[[190,296,60,8],[280,298,70,7],[380,299,40,6],[130,212,22,14],[566,186,18,16],[612,300,20,40]].forEach(function(g){c.beginPath();c.ellipse(g[0]*TS,g[1]*TS,g[2]*TS/2,g[3]*TS/2,0,0,7);c.fill();});
+    /* place Saint-Marc et marché du Rialto, pavés */
+    [[PLACE,'#e9d7a8'],[MARCHE,'#e4cf9c']].forEach(function(z){var r=z[0];c.fillStyle=z[1];c.fillRect(r[0]*TS,r[1]*TS,(r[2]-r[0])*TS,(r[3]-r[1])*TS);
+      c.strokeStyle='rgba(90,60,30,.25)';c.lineWidth=1;for(var x=r[0];x<=r[2];x+=2.5){c.beginPath();c.moveTo(x*TS,r[1]*TS);c.lineTo(x*TS,r[3]*TS);c.stroke();}for(var y=r[1];y<=r[3];y+=2.5){c.beginPath();c.moveTo(r[0]*TS,y*TS);c.lineTo(r[2]*TS,y*TS);c.stroke();}});
+    /* rii (petits canaux) */
+    P_RII.forEach(function(l){chemin(c,l);c.lineCap='round';c.lineJoin='round';c.strokeStyle=ENCRE;c.lineWidth=6.5*TS;c.stroke();c.strokeStyle='#3b5fa8';c.lineWidth=4.6*TS;c.stroke();});
+    /* Grand Canal : encre, lapis, vaguelettes d'or */
+    chemin(c,P_GC);c.lineCap='round';c.lineJoin='round';c.strokeStyle=ENCRE;c.lineWidth=13*TS;c.stroke();c.strokeStyle='#2c4a8f';c.lineWidth=11*TS;c.stroke();
+    c.setLineDash([4*TS,5*TS]);c.strokeStyle='rgba(230,200,110,.55)';c.lineWidth=.7*TS;c.stroke();c.setLineDash([]);
+    /* bassin de l'Arsenal et son chenal */
+    c.fillStyle=ENCRE;c.beginPath();c.ellipse(ARS.x*TS,ARS.y*TS,(ARS.rx+1)*TS,(ARS.ry+1)*TS,0,0,7);c.fill();
+    return cv;
+  }
+  function texEau(){
+    var cv=document.createElement('canvas');cv.width=cv.height=256;var c=cv.getContext('2d');
+    c.fillStyle='#2c4a8f';c.fillRect(0,0,256,256);
+    c.strokeStyle='rgba(230,200,110,.5)';c.lineWidth=2;
+    for(var y=8;y<256;y+=21)for(var x=(y/21%2)*16;x<256;x+=36){c.beginPath();c.moveTo(x,y+4);c.quadraticCurveTo(x+4.5,y-2,x+9,y+4);c.quadraticCurveTo(x+13.5,y+10,x+18,y+4);c.stroke();}
+    var t=new THREE.CanvasTexture(cv);t.wrapS=t.wrapT=THREE.RepeatWrapping;t.repeat.set(60,45);return t;
+  }
+  function forme(pts,trous){var s=new THREE.Shape(pts.map(function(p){return new THREE.Vector2(p[0]-320,-(p[1]-200));}));(trous||[]).forEach(function(h){s.holes.push(new THREE.Path(h.map(function(p){return new THREE.Vector2(p[0]-320,-(p[1]-200));})));});return s;}
+  function ellipsePts(cx,cy,rx,ry,n){var r=[];for(var i=0;i<n;i++){var a=i/n*Math.PI*2;r.push([cx+Math.cos(a)*rx,cy+Math.sin(a)*ry]);}return r;}
+  function ile(pts,matHaut,trous,h){
+    var g=new THREE.ExtrudeGeometry(forme(pts,trous),{depth:h||HAUT,bevelEnabled:false,curveSegments:4});
+    var m=new THREE.Mesh(g,[matHaut,mat('#b89d6a')]);m.rotation.x=-Math.PI/2;m.receiveShadow=true;scene.add(m);
+    var ed=new THREE.LineSegments(new THREE.EdgesGeometry(g,40),new THREE.LineBasicMaterial({color:ENCRE}));m.add(ed);return m;
+  }
+
+  /* ---- maisons : boîtes et toits en pyramide, en une seule passe (instances) ---- */
+  function maisons(){
+    var L=[],essais=0;
+    var ECARTS=[[262,142,16],[332,166,12],[432,234,20],[540,200,30],[418,240,8],[476,258,6]];
+    while(L.length<620&&essais<14000){essais++;
+      var x=rnd(105,600),y=rnd(100,265);
+      if(!inPoly(x,y,P_ILE))continue;
+      if(distLigne(x,y,P_ILE,true)<4)continue;
+      if(distLigne(x,y,P_GC)<9.5)continue;
+      var pr=false;for(var r=0;r<P_RII.length;r++)if(distLigne(x,y,P_RII[r])<5){pr=true;break;}if(pr)continue;
+      if(dansRect(x,y,[PLACE[0]-3,PLACE[1]-3,PLACE[2]+3,PLACE[3]+3])||dansRect(x,y,MARCHE))continue;
+      if(dansEllipse(x,y,ARS.x,ARS.y,ARS.mx+4,ARS.my+4))continue;
+      var loin=true;for(var e=0;e<ECARTS.length;e++)if(Math.hypot(x-ECARTS[e][0],y-ECARTS[e][1])<ECARTS[e][2]){loin=false;break;}if(!loin)continue;
+      var w=rnd(3.6,6.2),d=rnd(3.6,6.2),col=false;
+      for(var k=0;k<L.length;k++){var o=L[k];if(Math.abs(o.x-x)<(o.w+w)/2+.6&&Math.abs(o.y-y)<(o.d+d)/2+.6){col=true;break;}}if(col)continue;
+      L.push({x:x,y:y,w:w,d:d,h:rnd(3.5,7.5),c:choix(['#e7d3a8','#d9a77a','#c98a63','#efe2c4','#d8b98c','#cf9a86','#e3c08e'])});
+    }
+    var gb=new THREE.BoxGeometry(1,1,1);gb.translate(0,.5,0);
+    var gt=new THREE.ConeGeometry(.72,1,4);gt.translate(0,.5,0);gt.rotateY(Math.PI/4);
+    var murs=new THREE.InstancedMesh(gb,mat('#ffffff'),L.length),toits=new THREE.InstancedMesh(gt,mat('#8e3b22'),L.length);
+    var d=new THREE.Object3D(),col=new THREE.Color();
+    L.forEach(function(m,i){
+      d.position.copy(V(m.x,m.y,HAUT));d.rotation.set(0,0,0);d.scale.set(m.w,m.h,m.d);d.updateMatrix();murs.setMatrixAt(i,d.matrix);col.set(m.c);murs.setColorAt(i,col);
+      d.position.copy(V(m.x,m.y,HAUT+m.h));d.scale.set(m.w,Math.min(m.w,m.d)*.45,m.d);d.updateMatrix();toits.setMatrixAt(i,d.matrix);
+    });
+    murs.castShadow=murs.receiveShadow=toits.castShadow=true;scene.add(murs);scene.add(toits);
+  }
+  /* un clocher d'église de quartier (campanile) */
+  function campanile(x,y,h,c){boite(2.6,h,2.6,c||'#a8553a',x,y,HAUT,0,true);var t=new THREE.Mesh(new THREE.ConeGeometry(2.1,4,4),mat('#5f6f5c'));t.rotation.y=Math.PI/4;t.position.copy(V(x,y,HAUT+h+2));t.castShadow=true;bord(t);scene.add(t);}
+  function eglise(x,y,rot){boite(9,5.5,5,'#e6d2a6',x,y,HAUT,rot,true);var t=new THREE.Mesh(new THREE.CylinderGeometry(.01,3.8,2.6,4,1),mat('#8e3b22'));t.scale.set(1.75,1,.95);t.rotation.y=Math.PI/4+(rot||0);t.position.copy(V(x,y,HAUT+5.5+1.3));scene.add(t);}
+  function arbres(L,c,r){var g=new THREE.SphereGeometry(1,7,5);var m=new THREE.InstancedMesh(g,mat(c),L.length),d=new THREE.Object3D();L.forEach(function(p,i){var s=r*rnd(.7,1.3);d.position.copy(V(p[0],p[1],HAUT+s*.9));d.scale.set(s,s*1.1,s);d.updateMatrix();m.setMatrixAt(i,d.matrix);});m.castShadow=true;scene.add(m);}
+
+  /* ---- les cinq lieux ---- */
+  function saintMarc(){
+    /* la basilique en croix grecque, cinq coupoles */
+    var cx=434,cy=234;
+    boite(24,11,10,'#e8d6b0',cx,cy,HAUT,0,true);boite(10,11,22,'#e8d6b0',cx,cy,HAUT,0,true);
+    boite(26,7,3,'#d8c094',cx-13,cy,HAUT,Math.PI/2,true); /* le narthex, à l'ouest */
+    [[0,0,5.2],[-8,0,4],[8,0,4],[0,-7.5,4],[0,7.5,4]].forEach(function(k){
+      var s=new THREE.Mesh(new THREE.SphereGeometry(k[2],18,10,0,Math.PI*2,0,Math.PI/2),mat('#8c8a80'));s.position.copy(V(cx+k[0],cy+k[1],HAUT+11+1.2));s.castShadow=true;scene.add(s);
+      var tam=new THREE.Mesh(new THREE.CylinderGeometry(k[2],k[2],1.4,18),mat('#d8c094'));tam.position.copy(V(cx+k[0],cy+k[1],HAUT+11+.6));scene.add(tam);
+      var cr=new THREE.Mesh(new THREE.BoxGeometry(.35,2.4,.35),mat('#e6c86e',{emissive:'#5a4310'}));cr.position.copy(V(cx+k[0],cy+k[1],HAUT+12.2+k[2]+1));scene.add(cr);
+      var cb=new THREE.Mesh(new THREE.BoxGeometry(1.4,.35,.35),cr.material);cb.position.copy(V(cx+k[0],cy+k[1],HAUT+12.2+k[2]+1.4));scene.add(cb);
+    });
+    /* arcs dorés de la façade */
+    for(var a=0;a<5;a++){var ar=new THREE.Mesh(new THREE.TorusGeometry(1.6,.35,6,12,Math.PI),mat('#e6c86e',{emissive:'#4a360c'}));ar.position.copy(V(cx-14.6,cy-8+a*4,HAUT+4.6));ar.rotation.y=-Math.PI/2;scene.add(ar);}
+    /* le palais du doge, encore un château crénelé */
+    boite(18,8,9,'#e2cfa6',cx+4,cy+15,HAUT,0,true);
+    for(var m=0;m<9;m++)boite(1.2,1.3,1.2,'#e2cfa6',cx-4+m*2,cy+10.8,HAUT+8);
+    boite(4,12,4,'#d8c094',cx-6,cy+15,HAUT,0,true);
+    /* le campanile, au bord de la place */
+    campanile(418,242,30,'#a8553a');
+  }
+  function rialto(){
+    /* étals couverts de toiles de couleur, sacs de poivre, pains de sucre */
+    var cols=['#a3301c','#b0862a','#22397e','#2f6247','#a3301c','#e6c86e'];
+    for(var i=0;i<10;i++){var x=315+(i%5)*4.6,y=164+Math.floor(i/5)*9;
+      boite(3.2,1.2,2.4,'#7a5232',x,y,HAUT);
+      var tl=new THREE.Mesh(new THREE.BoxGeometry(4,.3,3.4),mat(cols[i%cols.length]));tl.position.copy(V(x,y,HAUT+3));tl.rotation.z=.12;tl.castShadow=true;scene.add(tl);
+      [[-1.8,-1.5],[1.8,-1.5],[-1.8,1.5],[1.8,1.5]].forEach(function(p){var po=new THREE.Mesh(new THREE.CylinderGeometry(.12,.12,3,5),mat('#4a3020'));po.position.copy(V(x+p[0],y+p[1],HAUT+1.5));scene.add(po);});
+      if(i%2===0){var sc=new THREE.Mesh(new THREE.ConeGeometry(.45,1.2,10),mat('#f6f0e2'));sc.position.copy(V(x-.6,y,HAUT+1.8));scene.add(sc);}
+      else{var sa=new THREE.Mesh(new THREE.SphereGeometry(.7,8,6),mat('#c9a77a'));sa.scale.y=.8;sa.position.copy(V(x+.5,y,HAUT+1.7));scene.add(sa);}
+    }
+    eglise(330,184,0);campanile(336,183,14);
+    /* pas de pont en 1147 : un passeur fait traverser le Grand Canal */
+    var b=barque('#5a3a22',8);b.position.copy(V(338,147,HAUT+.15));b.rotation.y=-.9;scene.add(b);anim.push({o:b,type:'passeur',t0:0});
+    var pers=new THREE.Mesh(new THREE.CylinderGeometry(.35,.5,2,6),mat('#a3301c'));pers.position.set(2.4,1.3,0);b.add(pers);
+  }
+  function maisonAgnese(){
+    var x=258,y=134;
+    boite(16,11,10,'#f0dcc6',x,y,HAUT,-.2,true);
+    for(var m=0;m<8;m++)boite(1.1,1.4,1.1,'#f0dcc6',x-7+m*2,y+4.6,HAUT+11,-.2);
+    /* arcades sur l'eau, au rez-de-chaussée */
+    for(var a=0;a<4;a++){var ar=new THREE.Mesh(new THREE.TorusGeometry(1.3,.32,6,12,Math.PI),mat('#a3301c'));var p=V(x-4.5+a*3,y+5.2+(a*3-4.5)*-.2,HAUT+2.6);ar.position.copy(p);ar.rotation.y=-.2;scene.add(ar);}
+    /* une bannière vermillon */
+    var mt=new THREE.Mesh(new THREE.CylinderGeometry(.15,.15,7,5),mat('#4a3020'));mt.position.copy(V(x+6,y-2,HAUT+11+3.5));scene.add(mt);
+    var dr=new THREE.Mesh(new THREE.PlaneGeometry(3.4,2),mat('#a3301c',{side:THREE.DoubleSide}));dr.position.copy(V(x+7.8,y-2,HAUT+11+5.8));scene.add(dr);anim.push({o:dr,type:'drapeau'});
+    var b=barque('#5a3a22',6);b.position.copy(V(268,147,HAUT+.15));b.rotation.y=-.25;scene.add(b);
+  }
+  function arsenal(){
+    /* bassin creusé dans l'île (trou), murs crénelés, coques en chantier */
+    var n=48;for(var i=0;i<n;i++){var a=i/n*Math.PI*2;if(Math.abs(a-Math.PI*.42)<.22)continue; /* porte d'eau au sud */
+      var x=ARS.x+Math.cos(a)*ARS.mx,y=ARS.y+Math.sin(a)*ARS.my,len=2*Math.PI*Math.hypot(ARS.mx,ARS.my)/Math.SQRT2/n+.6;
+      var w=boite(len,5,1.4,'#c98a63',x,y,HAUT,-a+Math.PI/2,false);
+      if(i%2===0)boite(1,1.2,1.4,'#c98a63',x,y,HAUT+5,-a+Math.PI/2);
+    }
+    [[ARS.x-ARS.mx,ARS.y],[ARS.x+ARS.mx,ARS.y],[ARS.x,ARS.y-ARS.my]].forEach(function(t){var to=new THREE.Mesh(new THREE.CylinderGeometry(2.2,2.4,9,10),mat('#b8754f'));to.position.copy(V(t[0],t[1],HAUT+4.5));to.castShadow=true;bord(to,.5);scene.add(to);});
+    /* galères en construction : la coque et ses membrures */
+    [[530,196,.1],[548,204,-.1]].forEach(function(g){var gr=new THREE.Group();var q=new THREE.Mesh(new THREE.BoxGeometry(16,1.6,3),mat('#7a4a2a'));q.position.y=.8;gr.add(q);
+      for(var k=-7;k<=7;k+=1.6){var mb=new THREE.Mesh(new THREE.TorusGeometry(1.7,.14,4,8,Math.PI),mat('#a87a50'));mb.position.set(k,1.6,0);mb.rotation.set(0,Math.PI/2,Math.PI);gr.add(mb);}
+      gr.position.copy(V(g[0],g[1],.2));gr.rotation.y=g[2];scene.add(gr);});
+    /* hangars le long du bassin */
+    for(var h=0;h<4;h++)boite(6,4,4,'#d9a77a',522+h*7,183,HAUT,0,true);
+  }
+  function quai(){
+    /* le quai de pierre et les navires amarrés dans le bassin de Saint-Marc */
+    boite(46,.6,4,'#d6c4a0',470,252.5,HAUT-.5,-.08,true);
+    [[462,266,-.1,'galere'],[486,270,.15,'nef'],[508,268,-.2,'galere'],[450,280,.3,'nef'],[530,282,.05,'galere']].forEach(function(n){var s=navire(n[3]);s.position.copy(V(n[0],n[1],0));s.rotation.y=n[2];scene.add(s);anim.push({o:s,type:'roulis',ph:rnd(0,6)});});
+  }
+  function barque(c,l){var g=new THREE.Group();var q=new THREE.Mesh(new THREE.BoxGeometry(l,.7,1.5),mat(c));q.position.y=.35;g.add(q);var p=new THREE.Mesh(new THREE.ConeGeometry(.75,1.6,4),mat(c));p.rotation.z=-Math.PI/2;p.position.set(l/2+.6,.35,0);p.scale.z=.9;g.add(p);return g;}
+  function voile(w,h,c){var g=new THREE.BufferGeometry();g.setAttribute('position',new THREE.Float32BufferAttribute([0,0,0, 0,h,0, w,0,0],3));g.computeVertexNormals();return new THREE.Mesh(g,mat(c||'#f6efdf',{side:THREE.DoubleSide}));}
+  function navire(type){
+    var g=new THREE.Group();
+    if(type==='galere'){var q=new THREE.Mesh(new THREE.BoxGeometry(20,1.6,3.2),mat('#6e3d22'));q.position.y=.8;g.add(q);bord(q,.5);
+      var pr=new THREE.Mesh(new THREE.ConeGeometry(1.6,4,4),mat('#6e3d22'));pr.rotation.z=-Math.PI/2;pr.position.set(12,1,0);g.add(pr);
+      for(var r=-8;r<=8;r+=2){[-1,1].forEach(function(s){var ra=new THREE.Mesh(new THREE.BoxGeometry(.18,.18,4),mat('#4a3020'));ra.position.set(r,1,s*2.6);ra.rotation.x=s*.35;g.add(ra);});}
+      var m=new THREE.Mesh(new THREE.CylinderGeometry(.18,.22,12,6),mat('#4a3020'));m.position.set(2,7,0);g.add(m);
+      var v=voile(11,10,'#f6efdf');v.position.set(-3.5,2.5,0);v.rotation.z=-.1;g.add(v);
+    }else{var c=new THREE.Mesh(new THREE.CylinderGeometry(3.3,2.6,3,10,1),mat('#7a4a2a'));c.scale.set(2.6,1,1);c.position.y=1.5;g.add(c);bord(c,.4);
+      var ch=new THREE.Mesh(new THREE.BoxGeometry(4,2,5),mat('#8a5a32'));ch.position.set(-6,3.6,0);g.add(ch);
+      [[-1,13],[4,10]].forEach(function(mm){var m2=new THREE.Mesh(new THREE.CylinderGeometry(.2,.25,mm[1],6),mat('#4a3020'));m2.position.set(mm[0],3+mm[1]/2,0);g.add(m2);var v2=voile(8,mm[1]-3,'#f6efdf');v2.position.set(mm[0]-4,5,0);g.add(v2);});
+      var cr=new THREE.Mesh(new THREE.PlaneGeometry(2,2),mat('#a3301c',{side:THREE.DoubleSide}));cr.position.set(-1,15.5,0);cr.rotation.y=Math.PI/2;g.add(cr);
+    }
+    g.traverse(function(o){if(o.isMesh)o.castShadow=true;});return g;
+  }
+  /* barques qui remontent le Grand Canal */
+  var GC_LONG=0,GC_CUM=[];
+  function surCanal(s){s=((s%GC_LONG)+GC_LONG)%GC_LONG;for(var i=1;i<P_GC.length;i++)if(GC_CUM[i]>=s){var a=P_GC[i-1],b=P_GC[i],f=(s-GC_CUM[i-1])/(GC_CUM[i]-GC_CUM[i-1]||1);return {x:a[0]+(b[0]-a[0])*f,y:a[1]+(b[1]-a[1])*f,ang:Math.atan2(b[1]-a[1],b[0]-a[0])};}return {x:P_GC[0][0],y:P_GC[0][1],ang:0};}
+  function barquesCanal(){
+    GC_CUM=[0];for(var i=1;i<P_GC.length;i++)GC_CUM.push(GC_CUM[i-1]+Math.hypot(P_GC[i][0]-P_GC[i-1][0],P_GC[i][1]-P_GC[i-1][1]));GC_LONG=GC_CUM[GC_CUM.length-1];
+    for(var k=0;k<7;k++){var b=barque(choix(['#5a3a22','#6e4a2a','#3d2a1a']),rnd(5,7));scene.add(b);anim.push({o:b,type:'canal',s:k*GC_LONG/7+rnd(0,20),v:rnd(4,7)*(k%2?1:-1),cote:(k%2?2.2:-2.2)});}
+  }
+
+  /* ---- étiquettes ---- */
+  function etiquette(t,x,y,h,style){labels.push({t:t,p:V(x,y,h||HAUT),s:style||'ville'});}
+
+  function init(){
+    inited=true;
+    R=new THREE.WebGLRenderer({antialias:true});R.setPixelRatio(Math.min(window.devicePixelRatio||1,2));R.shadowMap.enabled=true;R.shadowMap.type=THREE.PCFSoftShadowMap;
+    scene=new THREE.Scene();
+    /* un ciel d'or, comme le fond d'une enluminure */
+    var ciel=document.createElement('canvas');ciel.width=4;ciel.height=256;var cc=ciel.getContext('2d'),gd=cc.createLinearGradient(0,0,0,256);gd.addColorStop(0,'#c9a24a');gd.addColorStop(.5,'#e6c86e');gd.addColorStop(1,'#f4ead2');cc.fillStyle=gd;cc.fillRect(0,0,4,256);
+    scene.background=new THREE.CanvasTexture(ciel);scene.fog=new THREE.Fog('#e9d9a8',900,2200);
+    cam=new THREE.PerspectiveCamera(36,1.6,1,6000);
+    scene.add(new THREE.HemisphereLight('#fff8e8','#6b5a3c',.66));
+    var sol=new THREE.DirectionalLight('#fff0d0',.62);sol.position.set(-260,420,180);sol.castShadow=true;
+    Object.assign(sol.shadow.camera,{left:-380,right:380,top:260,bottom:-260,near:10,far:1200});sol.shadow.mapSize.set(2048,2048);sol.shadow.bias=-.0006;scene.add(sol);scene.add(sol.target);
+    /* l'eau de la lagune */
+    eauTex=texEau();
+    var eau=new THREE.Mesh(new THREE.PlaneGeometry(2400,1800),new THREE.MeshPhongMaterial({map:eauTex,shininess:40,specular:'#c8b070'}));eau.rotation.x=-Math.PI/2;eau.receiveShadow=true;scene.add(eau);
+    /* les îles */
+    var tx=new THREE.CanvasTexture(textureIles());tx.repeat.set(1/640,1/400);tx.offset.set(.5,.5);tx.anisotropy=4;
+    var mh=new THREE.MeshLambertMaterial({map:tx});
+    ile(P_ILE,mh,[ellipsePts(ARS.x,ARS.y,ARS.rx,ARS.ry,32)]);
+    ile(echantillon(GIUDECCA),mh);ile(ellipsePts(500,296,18,9,28),mh);ile(echantillon(LIDO),mh);ile(echantillon(TERRE),mh);
+    /* sous l'eau peinte des canaux, un vrai chenal pour l'Arsenal */
+    maisons();saintMarc();rialto();maisonAgnese();arsenal();quai();barquesCanal();
+    [[214,150,16],[300,124,18],[372,214,15],[470,150,17],[504,232,14],[178,236,13],[396,130,16],[260,214,15]].forEach(function(c){campanile(c[0],c[1],c[2]);});
+    eglise(500,295,0);campanile(508,294,13);
+    var T=[];for(var i=0;i<70;i++)T.push([rnd(180,420),rnd(297,304)]);for(var j=0;j<40;j++){var lx=rnd(585,640),ly=rnd(270,380);if(inPoly(lx,ly,echantillon(LIDO)))T.push([lx,ly]);}for(var k=0;k<40;k++)T.push([rnd(-40,40),rnd(150,215)]);
+    arbres(T.filter(function(p){return inPoly(p[0],p[1],echantillon(GIUDECCA))||p[0]>560||p[0]<60;}),'#4f6a35',2.4);
+    /* étiquettes : celles du plan 2D */
+    etiquette('Grand Canal',224,170,HAUT,'eau');etiquette('la lagune',160,64,0,'titre');etiquette('Giudecca',300,300,HAUT+2,'ile');
+    etiquette('Lido',612,330,HAUT+2,'ile');etiquette('terre ferme',10,170,HAUT+3,'ile');etiquette('vers la mer Adriatique →',520,372,0,'eau');
+    etiquette('Bassin de Saint-Marc',446,318,0,'eau');
+    cam.position.copy(VUE.pos);
+    ctl=new THREE.OrbitControls(cam,R.domElement);ctl.target.copy(VUE.cible);ctl.enableDamping=true;ctl.dampingFactor=.08;ctl.maxPolarAngle=Math.PI*.43;ctl.minDistance=50;ctl.maxDistance=900;ctl.screenSpacePanning=false;
+    ctl.mouseButtons={LEFT:THREE.MOUSE.ROTATE,MIDDLE:THREE.MOUSE.DOLLY,RIGHT:THREE.MOUSE.PAN};ctl.touches={ONE:THREE.TOUCH.ROTATE,TWO:THREE.TOUCH.DOLLY_PAN};ctl.update();
+    R.domElement.addEventListener('pointermove',bouge);R.domElement.addEventListener('pointerleave',function(){if(tip)tip.hidden=true;R.domElement.style.cursor='';});
+    var dep=null;R.domElement.addEventListener('pointerdown',function(e){dep=[e.clientX,e.clientY];});
+    R.domElement.addEventListener('pointerup',function(e){if(!dep)return;var m=Math.hypot(e.clientX-dep[0],e.clientY-dep[1]);dep=null;if(m>6)return;var p=viser(e);if(p&&p.go&&onClic)onClic(p.go);});
+  }
+  var VUE={pos:{x:34,y:285,z:292},cible:{x:34,y:0,z:14}};
+
+  /* ---- pastilles des lieux : dessinées à plat sur un calque, reliées au lieu par un trait ---- */
+  var TP=30;
+  var ANCRE={maison:[258,134,HAUT+13,-10,-34,-1],rialto:[324,168,HAUT+4,8,-34,1],marc:[434,234,HAUT+20,-16,-30,-1],chantier:[540,200,HAUT+9,10,-34,1],quai:[476,253,HAUT+1,0,26,1]};
+  function pinImg(l){
+    var c=document.createElement('canvas');c.width=c.height=96;var x=c.getContext('2d');
+    var fond=l.vu?'#2f6247':l.go?'#a3301c':'#b0862a';
+    x.beginPath();x.arc(48,48,42,0,Math.PI*2);x.fillStyle=fond;x.fill();x.lineWidth=7;x.strokeStyle=ENCRE;x.stroke();
+    x.beginPath();x.arc(48,48,33,0,Math.PI*2);x.lineWidth=3;x.strokeStyle='#e6c86e';x.stroke();
+    x.fillStyle='#f4ead2';x.font="700 44px Georgia, serif";x.textAlign='center';x.textBaseline='middle';x.fillText(l.vu?'✓':(l.num||'⚓'),48,51);
+    return c;
+  }
+  function placerPins(lieux){pins=[];lieux.forEach(function(l){var a=ANCRE[l.k];if(!a)return;pins.push({k:l.k,go:l.go,nom:l.nom,court:l.court,vu:l.vu,img:pinImg(l),anc:V(a[0],a[1],a[2]),dx:a[3],dy:a[4],cote:a[5],visible:false});});}
+  function viser(e){var r=R.domElement.getBoundingClientRect(),x=e.clientX-r.left,y=e.clientY-r.top;
+    for(var i=pins.length-1;i>=0;i--){var p=pins[i];if(!p.visible)continue;if(Math.hypot(x-p.cx,y-p.cy)<=TP/2+4||(x>=p.rl[0]&&x<=p.rl[2]&&y>=p.rl[1]&&y<=p.rl[3]))return p;}return null;}
+  function bouge(e){var p=viser(e);R.domElement.style.cursor=p&&p.go?'pointer':'';
+    if(tip){if(p){var r=box.getBoundingClientRect();tip.textContent=p.go?(p.vu?p.nom+' · déjà visité':'Aller : '+p.nom):p.nom+' · départ du navire';tip.style.left=(e.clientX-r.left)+'px';tip.style.top=(e.clientY-r.top)+'px';tip.hidden=false;}else tip.hidden=true;}}
+  var vp=null;
+  function calque(t){
+    var W=box.clientWidth,H=box.clientHeight,dpr=Math.min(window.devicePixelRatio||1,2);
+    if(OV.width!==Math.round(W*dpr)||OV.height!==Math.round(H*dpr)){OV.width=Math.round(W*dpr);OV.height=Math.round(H*dpr);OV.style.width=W+'px';OV.style.height=H+'px';}
+    var c=OX;c.setTransform(dpr,0,0,dpr,0,0);c.clearRect(0,0,W,H);c.lineJoin='round';c.textBaseline='middle';
+    var occ=[];
+    /* pastilles d'abord : elles sont prioritaires */
+    var vis=[];
+    pins.forEach(function(p){vp.copy(p.anc).project(cam);p.visible=false;if(!(vp.z<1&&vp.z>-1))return;p.ax=(vp.x+1)/2*W;p.ay=(1-vp.y)/2*H;p.cx=p.ax+p.dx;p.cy=p.ay+p.dy;vis.push(p);});
+    for(var it=0;it<8;it++)for(var a=0;a<vis.length;a++)for(var b=a+1;b<vis.length;b++){var P1=vis[a],P2=vis[b],ddx=P2.cx-P1.cx,ddy=P2.cy-P1.cy,d=Math.hypot(ddx,ddy)||1,m=TP+8;if(d<m){var k=(m-d)/2;ddx/=d;ddy/=d;P1.cx-=ddx*k;P1.cy-=ddy*k;P2.cx+=ddx*k;P2.cy+=ddy*k;}}
+    vis.forEach(function(p){var r=TP/2+2;p.cx=Math.max(r+4,Math.min(W-r-4,p.cx));p.cy=Math.max(44+r,Math.min(H-30-r,p.cy));});
+    var calm=estCalme();
+    c.font="15px 'Uncial Antiqua', Georgia, serif";
+    vis.forEach(function(p,i){var r=TP/2,bat=(p.go&&!p.vu&&!calm)?1+Math.sin(t*.003+i)*.07:1,rr=r*bat,vx=p.cx-p.ax,vy=p.cy-p.ay,L=Math.hypot(vx,vy)||1,ex=p.cx-vx/L*rr,ey=p.cy-vy/L*rr;
+      c.lineCap='round';c.beginPath();c.moveTo(p.ax,p.ay);c.lineTo(ex,ey);c.strokeStyle='rgba(244,234,210,.95)';c.lineWidth=6;c.stroke();c.strokeStyle=ENCRE;c.lineWidth=3;c.stroke();
+      c.beginPath();c.arc(p.ax,p.ay,4.5,0,7);c.fillStyle=ENCRE;c.fill();c.lineWidth=2;c.strokeStyle='#f4ead2';c.stroke();
+      c.drawImage(p.img,p.cx-rr,p.cy-rr,rr*2,rr*2);
+      var tw=c.measureText(p.court).width,tx=p.cote>0?p.cx+r+6:p.cx-r-6-tw;if(tx+tw>W-4)tx=p.cx-r-6-tw;if(tx<4)tx=p.cx+r+6;
+      c.textAlign='left';c.strokeStyle='rgba(244,234,210,.95)';c.lineWidth=5;c.strokeText(p.court,tx,p.cy);c.fillStyle=ENCRE;c.fillText(p.court,tx,p.cy);
+      p.visible=true;p.rl=[tx-3,p.cy-11,tx+tw+3,p.cy+11];occ.push([p.cx-r-2,p.cy-r-2,p.cx+r+2,p.cy+r+2],p.rl);});
+    /* étiquettes des lieux géographiques, si elles ne gênent pas une pastille */
+    labels.forEach(function(l){vp.copy(l.p).project(cam);if(!(vp.z<1&&vp.z>-1))return;var x=(vp.x+1)/2*W,y=(1-vp.y)/2*H;
+      var f=l.s==='titre'?"20px 'Uncial Antiqua', Georgia, serif":l.s==='eau'?"italic 14px Georgia, serif":"14px Georgia, serif";c.font=f;
+      var tw=c.measureText(l.t).width,rc=[x-tw/2-3,y-10,x+tw/2+3,y+10];if(rc[0]<2||rc[2]>W-2||rc[1]<2||rc[3]>H-2)return;
+      for(var o=0;o<occ.length;o++){var q=occ[o];if(rc[0]<q[2]&&rc[2]>q[0]&&rc[1]<q[3]&&rc[3]>q[1])return;}
+      occ.push(rc);c.textAlign='center';
+      if(l.s==='eau'||l.s==='titre'){c.strokeStyle='rgba(28,40,90,.75)';c.lineWidth=4;c.strokeText(l.t,x,y);c.fillStyle='#f4ead2';c.fillText(l.t,x,y);}
+      else{c.strokeStyle='rgba(244,234,210,.9)';c.lineWidth=4;c.strokeText(l.t,x,y);c.fillStyle=ENCRE;c.fillText(l.t,x,y);}});
+    /* la rose des vents tourne avec la vue */
+    if(boussole){var az=Math.atan2(cam.position.x-ctl.target.x,cam.position.z-ctl.target.z);boussole.style.transform='rotate('+(az*180/Math.PI).toFixed(1)+'deg)';}
+  }
+  function animer(t){
+    if(estCalme())return;
+    var s=t/1000;eauTex.offset.x=(s*.004)%1;eauTex.offset.y=(s*.002)%1;
+    anim.forEach(function(a){
+      if(a.type==='roulis'){a.o.rotation.z=Math.sin(s*.9+a.ph)*.03;a.o.rotation.x=Math.sin(s*.7+a.ph)*.025;a.o.position.y=Math.sin(s*1.1+a.ph)*.25;}
+      else if(a.type==='drapeau'){a.o.rotation.y=Math.sin(s*2.2)*.35;}
+      else if(a.type==='passeur'){var f=(Math.sin(s*.25)+1)/2;a.o.position.copy(V(338+f*14,146+f*18,HAUT+.15));}
+      else if(a.type==='canal'){var dt=a.dern?s-a.dern:0;a.dern=s;a.s+=a.v*dt;var q=surCanal(a.s),nx=-Math.sin(q.ang),ny=Math.cos(q.ang);a.o.position.copy(V(q.x+nx*a.cote,q.y+ny*a.cote,HAUT+.12));a.o.rotation.y=-q.ang+(a.v<0?Math.PI:0);}
+    });
+  }
+  function premierPlacement(){/* place les barques du canal même quand tout est figé */anim.forEach(function(a){if(a.type==='canal'){var q=surCanal(a.s),nx=-Math.sin(q.ang),ny=Math.cos(q.ang);a.o.position.copy(V(q.x+nx*a.cote,q.y+ny*a.cote,HAUT+.12));a.o.rotation.y=-q.ang+(a.v<0?Math.PI:0);}});}
+  function taille(){if(!box||!R)return;var w=box.clientWidth,h=box.clientHeight;if(!w||!h)return;R.setSize(w,h,false);cam.aspect=w/h;cam.updateProjectionMatrix();}
+  function boucle(t){if(!actif)return;if(!R.domElement.isConnected){actif=false;return;}
+    ctl.update();
+    ctl.target.x=Math.max(-300,Math.min(320,ctl.target.x));ctl.target.z=Math.max(-160,Math.min(200,ctl.target.z));ctl.target.y=0;
+    animer(t);R.render(scene,cam);calque(t);requestAnimationFrame(boucle);}
+  function lancer(el,lieux){box=el;el.insertBefore(R.domElement,el.firstChild);R.domElement.setAttribute('aria-hidden','true');
+    if(!OV){OV=document.createElement('canvas');OV.setAttribute('aria-hidden','true');OV.style.cssText='position:absolute;left:0;top:0;pointer-events:none';OX=OV.getContext('2d');vp=new THREE.Vector3();}
+    el.insertBefore(OV,R.domElement.nextSibling);boussole=el.querySelector('.rose3d');
+    placerPins(lieux);taille();recentrer();actif=true;requestAnimationFrame(boucle);}
+  /* el : la boîte ; lieux : [{k,go,nom,court,num,vu}] ; clic(go) ; bulle : l'infobulle ; calme() : animations coupées ? */
+  function monter(el,lieux,clic,bulle,calme){
+    if(!ok())return null;tip=bulle;onClic=clic;box=el;if(calme)estCalme=calme;
+    var h={stop:function(){actif=false;}};
+    if(inited){lancer(el,lieux);return h;}
+    var msg=document.createElement('div');msg.textContent='Préparation de Venise en relief…';
+    msg.style.cssText='position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font-family:Georgia,serif;color:#5b4632;background:#ecdcb8';el.appendChild(msg);
+    setTimeout(function(){try{init();premierPlacement();}catch(e){inited=false;msg.textContent='La vue 3D n\'est pas disponible : choisis « Plan 2D ».';if(window.console)console.error(e);return;}
+      if(msg.parentNode)msg.parentNode.removeChild(msg);if(el.isConnected)lancer(el,lieux);},40);
+    return h;
+  }
+  /* vue de départ : on recule si le cadre est plus haut que large, pour voir toute la ville */
+  function recentrer(){if(!inited)return;var k=Math.max(1,1.9/(cam.aspect||1.9));ctl.target.set(VUE.cible.x,VUE.cible.y,VUE.cible.z);cam.position.set(VUE.cible.x+(VUE.pos.x-VUE.cible.x)*k,VUE.pos.y*k,VUE.cible.z+(VUE.pos.z-VUE.cible.z)*k);ctl.update();}
+  return {ok:ok,monter:monter,recentrer:recentrer,pastilles:function(){return pins.filter(function(p){return p.visible;}).map(function(p){return {k:p.k,go:p.go,x:p.cx,y:p.cy};});}};
+})();
+</script>
 <script>
 function erreurVisible(m){try{var f=document.getElementById('folio');if(!f)return;f.innerHTML='<div style="padding:28px;font-size:17px;line-height:1.5"><h2 style="color:#a3301c;margin:0 0 8px">Le jeu n\'a pas pu démarrer</h2><p>Recharge la page. Si le problème revient, recopie ce message pour ton professeur :</p><pre style="white-space:pre-wrap;background:#f4ead2;padding:10px;border-radius:10px;font-size:13px">'+String(m).replace(/</g,'&lt;')+'\n'+navigator.userAgent+'</pre></div>';}catch(e){}}
 window.addEventListener('error',function(e){var f=document.getElementById('folio');if(f&&!f.firstChild)erreurVisible((e&&e.message)||'erreur inconnue');});
@@ -430,7 +794,7 @@ function lireStock(k){try{var j=localStorage.getItem(k);return j?JSON.parse(j):n
 function ecrireStock(k,v){try{localStorage.setItem(k,JSON.stringify(v));}catch(e){}}
 function sauver(){ecrireStock(CLE,S);}
 function effacer(){try{localStorage.removeItem(CLE);}catch(e){}}
-(function(){var p=lireStock(CLE_PREF);if(p){PREF.lecture=!!p.lecture;PREF.musique=p.musique!==false;}})();
+(function(){var p=lireStock(CLE_PREF);if(p){PREF.lecture=!!p.lecture;PREF.musique=p.musique!==false;if(p.vueVenise==='2d')PREF.vueVenise='2d';}})();
 
 /* ============ FRAGMENTS DE SOUVENIRS ============ */
 var FRAGMENTS=[
@@ -1808,6 +2172,32 @@ function rendre(){
   majCarnet();  majBoutonCarte();
 }
 function folDe(sc){return sc.fin?sc.fin:(sc.fol||'§ '+romain(sc.n));}
+/* Plan de Venise : vue 3D par défaut, plan 2D au choix ou si la 3D n'est pas disponible */
+var AIDE3D="Glisser : tourner · Molette ou pincer : zoomer · Clic droit ou deux doigts : déplacer · Clic sur une pastille : y aller";
+var COURT_PV={maison:'Donna Agnese',rialto:'Rialto',marc:'Saint-Marc',chantier:'Chantiers navals',quai:'Quai'};
+function venise3dDispo(){return !!(window.VENISE3D&&VENISE3D.ok());}
+function venise3dActive(){return PREF.vueVenise!=='2d'&&venise3dDispo();}
+function vueVenise(){
+  var en3d=venise3dActive();
+  var bascule=venise3dDispo()?'<div class="bascule-vue" role="group" aria-label="Type de vue"><button type="button" data-vue="3d" aria-pressed="'+en3d+'">Vue 3D</button><button type="button" data-vue="2d" aria-pressed="'+!en3d+'">Plan 2D</button>'+(en3d?'<button type="button" data-vue="centre" title="Revenir à la vue de départ">⟲ Recentrer</button>':'')+'</div>':'';
+  if(!en3d)return '<div class="plan-vue">'+bascule+'<div class="plan-boite">'+planVenise({interactif:true})+'</div></div>';
+  return '<div class="plan-vue">'+bascule+'<div class="plan3d" id="plan3d" role="img" aria-label="Venise vers 1147 en 3D : le Grand Canal, Saint-Marc, le Rialto et les chantiers navals. La liste des lieux, à droite, donne les mêmes liens.">'+
+    '<div class="tip3d" id="tip3d" hidden></div><div class="legende3d" aria-hidden="true"><span><i class="l-ouvert"></i>À visiter</span><span><i class="l-vu"></i>Déjà visité</span></div>'+
+    '<svg class="rose3d" viewBox="-22 -22 44 44" aria-hidden="true"><circle r="20" fill="#f4ead2" stroke="#2a1c12"/><path d="M0-18L5 0L0 18L-5 0Z" fill="#a3301c" stroke="#2a1c12"/><path d="M-18 0L0-5L18 0L0 5Z" fill="#22397e" opacity=".6"/><text y="-9" text-anchor="middle" font-size="9" font-family="Georgia,serif" fill="#f4ead2">N</text></svg>'+
+    '<p class="aide3d">'+AIDE3D+'</p></div></div>';
+}
+function brancherVueVenise(){
+  document.querySelectorAll('.bascule-vue [data-vue]').forEach(function(b){b.addEventListener('click',function(){
+    var v=b.getAttribute('data-vue');
+    if(v==='centre'){if(window.VENISE3D)VENISE3D.recentrer();return;}
+    if((v==='2d')===(PREF.vueVenise==='2d'))return;
+    PREF.vueVenise=v==='2d'?'2d':'3d';ecrireStock(CLE_PREF,PREF);rendre();
+    var nb=document.querySelector('.bascule-vue [data-vue="'+v+'"]');if(nb)nb.focus({preventScroll:true});});});
+  if(!venise3dActive()||!$('plan3d'))return;
+  var i=1,lieux=['maison','rialto','marc','chantier','quai'].map(function(k){var p=PV[k];return {k:k,go:p.go||'',nom:p.n,court:COURT_PV[k],num:p.go?i++:0,vu:!!(p.go&&S.vus[p.go])};});
+  var h=VENISE3D.monter($('plan3d'),lieux,function(go){aller(go);},$('tip3d'),calme);
+  if(h)nettoyages.push(h.stop);
+}
 function rendreScene(){
   var id=S.scene,sc=SC[id];
   if(MODEJEU&&sc.jeu&&!S.jeux[id]){
@@ -1815,9 +2205,10 @@ function rendreScene(){
     JEUX[sc.jeu.type]($('zone-jeu'),function(g){finJeu(id,g);});brancherVoix();return;
   }
   var plan=sc.plan;
-  coquille({illus:plan?'<div class="plan-boite">'+(plan==='venise'?planVenise({interactif:true}):planCple({interactif:true}))+'</div>':MINI[sc.img](),
-    legende:plan?(plan==='venise'?'Plan de Venise : touche un lieu pour t\'y rendre':'Plan de Constantinople : touche un lieu pour t\'y rendre'):LEG[sc.img],
+  coquille({illus:plan?(plan==='venise'?vueVenise():'<div class="plan-boite">'+planCple({interactif:true})+'</div>'):MINI[sc.img](),
+    legende:plan?(plan==='venise'?(venise3dActive()?'Venise en 3D : touche une pastille pour t\'y rendre':'Plan de Venise : touche un lieu pour t\'y rendre'):'Plan de Constantinople : touche un lieu pour t\'y rendre'):LEG[sc.img],
     doc:sc.doc,rub:sc.rub||ACTES[sc.acte],fol:folDe(sc),titre:sc.titre});
+  if(plan==='venise')brancherVueVenise();
   var blocs=[],an=blocAnnonces();if(an)blocs.push(an);
   var jeuFait=sc.jeu&&S.jeux[id];
   var corps=jeuFait?val(sc.apres||[]):val(sc.txt);
