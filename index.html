@@ -394,7 +394,15 @@ body.lecture *,body.lecture *::before,body.lecture *::after{animation:none!impor
 .aide3d{position:absolute;left:8px;bottom:8px;margin:0;max-width:calc(100% - 16px);background:rgba(244,234,210,.9);color:var(--encre);font-size:.72rem;line-height:1.3;padding:3px 9px;border-radius:8px;pointer-events:none}
 body.lecture .aide3d,body.lecture .legende3d{font-size:.8rem}
 @media (max-width:899px),(max-height:479px){.plan3d,.col-illus.avec-doc .plan3d{max-height:none;height:min(56vw,46vh);aspect-ratio:auto}}
+/* Grandes lettres : tout le texte agrandi de 25 % (le bandeau garde sa taille) */
+html.grand-texte{font-size:125%}
+html.grand-texte body{font-size:calc(var(--taille) * 1.25)}
+html.grand-texte .btn-ecran{font-size:.69rem}
+html.grand-texte .bandeau .titre{font-size:1.28rem}
+html.grand-texte body.lecture .bandeau .titre{font-size:.96rem}
+.btn-taille b{font-weight:700;letter-spacing:-.02em}
 </style>
+<script>try{if(localStorage.getItem("jeux-grand-texte")==="1")document.documentElement.classList.add("grand-texte");}catch(e){}</script>
 
 <div class="app">
   <header class="bandeau">
@@ -403,6 +411,7 @@ body.lecture .aide3d,body.lecture .legende3d{font-size:.8rem}
       <button class="btn-ecran btn-carnet" id="btn-carte" type="button" aria-expanded="false" aria-controls="carte-voyage">Carte</button>
       <button class="btn-ecran btn-carnet" id="btn-carnet" type="button" aria-expanded="false" aria-controls="carnet">Mon carnet</button>
       <button class="btn-ecran" id="btn-lecture" type="button" aria-pressed="false">Mode lecture</button>
+      <button class="btn-ecran btn-taille" id="btn-taille" type="button" aria-pressed="false" title="Agrandir les lettres de tous les textes"><b aria-hidden="true">A+</b> Grandes lettres</button>
       <button class="btn-ecran" id="btn-musique" type="button" aria-pressed="true">♪ Musique : oui</button>
       <button class="btn-ecran" id="btn-ecran" type="button">Plein écran</button>
     </div>
@@ -2247,7 +2256,7 @@ function rendreGuide(){
    fiche(ICO.mot,'Les mots soulignés',"Touche un mot souligné, comme [[parvis]], pour en lire l'explication.")+
    fiche(ICO.plan,'La carte et les plans',"Le bouton « Carte » montre les lieux déjà atteints, avec leur nom d'aujourd'hui. Dans les grandes villes, un plan permet de choisir où aller.")+
    fiche(ICO.jeu,'Les épreuves',"Des épreuves rythment le voyage. Si l'une te bloque, tu peux la passer, mais cela a un prix.")+
-   fiche(ICO.lecture,'Mode lecture et voix',"« Mode lecture » rend le texte plus facile à lire. « Écouter » lit la page à voix haute.")+
+   fiche(ICO.lecture,'Mode lecture et voix',"« Mode lecture » rend le texte plus facile à lire. « Écouter » lit la page à voix haute. « A+ Grandes lettres » agrandit tous les textes.")+
    fiche(ICO.relie,'Le bilan',"À la fin, tu classeras ce que tu as vu pendant ton voyage. Sous chaque image, un document d'époque s'agrandit d'un clic. Ouvre bien les yeux !")+
    '</div>'],
    function(){construireChoix($('choix'),[{l:'Commencer : le prologue',action:function(){aller('0');}}]);});
@@ -2376,6 +2385,8 @@ $('btn-musique').addEventListener('click',function(){
   if(PREF.musique){M.ac.resume().then(function(){musique(M.voulu);});}else{M.ac.suspend();}
 });
 $('btn-lecture').addEventListener('click',function(){PREF.lecture=!PREF.lecture;ecrireStock(CLE_PREF,PREF);majBoutons();if(!MODEJEU){PAGE=0;rendre();}});
+$('btn-taille').addEventListener('click',function(){var on=!document.documentElement.classList.contains('grand-texte');document.documentElement.classList.toggle('grand-texte',on);try{localStorage.setItem('jeux-grand-texte',on?'1':'0');}catch(e){}this.setAttribute('aria-pressed',on?'true':'false');fermerBulle();if(!MODEJEU){PAGE=0;rendre();}});
+$('btn-taille').setAttribute('aria-pressed',document.documentElement.classList.contains('grand-texte')?'true':'false');
 $('btn-ecran').addEventListener('click',function(){
   try{var d=document;if(d.fullscreenElement){if(d.exitFullscreen)d.exitFullscreen().catch(function(){});}
     else{var p=d.documentElement.requestFullscreen&&d.documentElement.requestFullscreen();if(p&&p.catch)p.catch(function(){});}}catch(e){}
